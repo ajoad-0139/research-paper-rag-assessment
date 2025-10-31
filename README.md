@@ -1,413 +1,288 @@
-# 🎓 Research Paper Assistant - RAG System Assessment
+Research Paper RAG — Quick Start & Run Manual
 
-## 🎯 Objective
-Build a production-ready RAG (Retrieval-Augmented Generation) service that helps researchers efficiently query and understand academic papers.
+A compact README to run your Express + MongoDB + Qdrant + local-LLM stack, test the main endpoints, and troubleshoot common issues. This is an MVP-focused manual — enough to get the app running and test the main flows (upload papers, index embeddings, run a query, view/download paper stats).
 
-## 💡 The Problem
-Researchers waste hours reading through multiple papers to find:
-- Specific methodologies and approaches
-- Key findings and results
-- Dataset information and benchmarks
-- Comparative analysis across papers
-- Citations and references
+1 — Prerequisites
 
-**Your mission**: Build an intelligent assistant that does this in seconds.
+Node.js (v18+ recommended)
 
----
+npm or yarn
 
-## 🛠️ Required Tech Stack
+MongoDB (running and accessible)
 
-| Component | Technology | Why |
-|-----------|-----------|-----|
-| **Vector DB** | Qdrant | Fast similarity search |
-| **Database** | PostgreSQL/MySQL/MongoDB | Metadata & query history |
-| **LLM** | Ollama OR DeepSeek | Answer generation |
-| **Embeddings** | sentence-transformers | Text vectorization |
-| **Backend** | Python + FastAPI/Flask Or Any Other Language | API service |
+Docker (to run Qdrant) or a running Qdrant instance
 
----
+Your local LLM service running at http://localhost:11434 that exposes:
 
-## 📋 Features to Implement
+POST /api/generate (LLM text generation)
 
-### ✅ Must-Have Features
+POST /api/embeddings (embedding generation)
 
-#### 1. Document Ingestion System
-```python
+(Optional) git to clone the repo
+
+2 — Important defaults used in the project
+
+Change these in your .env if needed.
+
+PORT=5000
+MONGO_URI=mongodb://localhost:27017/researchdb
+QDRANT_HOST=http://localhost
+QDRANT_PORT=6333
+QDRANT_COLLECTION=research-papers
+LLM_ENDPOINT=http://localhost:11434/api/generate
+EMBED_ENDPOINT=http://localhost:11434/api/embeddings
+EMBED_MODEL=nomic-embed-text
+LLM_MODEL=deepseek-r1:latest
+
+3 — Install & run
+
+Install dependencies
+
+npm install
+
+# or
+
+yarn
+
+Start MongoDB (if not already running)
+
+Start Qdrant (Docker)
+
+# Example: persistent storage mapped to host path
+
+docker run -d \
+ --name qdrant \
+ -p 6333:6333 \
+ -v /path/to/qdrant_storage:/qdrant/storage \
+ qdrant/qdrant
+
+If you prefer ephemeral (no storage persist):
+
+docker run -d --name qdrant -p 6333:6333 qdrant/qdrant
+
+Start your local LLM / embedding service
+
+Ensure your LLM is reachable at http://localhost:11434 and supports the expected endpoints:
+
+POST /api/generate → respond with JSON containing response (text)
+
+POST /api/embeddings → respond with { embedding: [...] }
+
+This repo expects deepseek-r1:latest and nomic-embed-text (model names are passed to your local service), but adapt to your LLM.
+
+Start the Express app
+
+npm run dev
+
+# or
+
+node src/index.js
+
+(Adjust the start command to match your package.json.)
+
+4 — API quick reference
+Upload a paper (ingest + index)
 POST /api/papers/upload
-```
-- Accept PDF research papers
-- Extract text with section awareness (Abstract, Intro, Methods, Results, Conclusion)
-- Intelligent chunking (preserve semantic context)
-- Generate embeddings
-- Store vectors in Qdrant with metadata
-- Save paper info in database
+Form: multipart/form-data
+Field: file (the PDF)
 
-**Expected Behavior**:
-- Handle multi-page PDFs
-- Extract author names, title, year
-- Store page numbers for citations
-- Process 5 papers in < 2 minutes
+Example (curl):
 
-#### 2. Intelligent Query System
-```python
+curl -v -F "file=@./papers/paper_3.pdf" http://localhost:5000/api/papers/upload
+
+Response: saved paper info + embeddings upload result.
+
+Get one paper (and automatically clean & organize segments)
+GET /api/papers/:id
+
+Example:
+
+GET http://localhost:5000/api/papers/6904e9fc25d40775f452a73f
+
+Note: use path param :id (not ?id=). Controller uses req.params.id.
+
+Delete a paper + its vectors
+DELETE /api/papers/:id
+
+Example:
+
+DELETE http://localhost:5000/api/papers/6904e9fc25d40775f452a73f
+
+This deletes the MongoDB doc and all Qdrant vectors with payload.paperId === id.
+
+Make sure the collection name in controller matches the actual Qdrant collection (default: research-papers).
+
+View / download paper stats & segments CSV
+GET /api/papers/:id/stats
+
+Query params:
+
+download=true → returns a CSV attachment containing segments (increments download counter)
+
+limitSegments=N → when download requested, limit rows in CSV
+
+Examples:
+
+JSON stats:
+
+GET http://localhost:5000/api/papers/6904e9fc25d40775f452a73f/stats
+
+CSV download:
+
+GET "http://localhost:5000/api/papers/6904e9fc25d40775f452a73f/stats?download=true&limitSegments=10"
+
+Run a query (RAG)
 POST /api/query
+Content-Type: application/json
+Body example:
 {
-  "question": "What methodology was used in the transformer paper?",
-  "top_k": 5,
-  "paper_ids": [1, 3]  // optional: limit to specific papers
+"id": 1,
+"question": "What is the main goal of the paper 'Attention is All You Need'?",
+"expected_papers": ["paper_3.pdf"], // optional: restrict search
+"difficulty": "easy",
+"type": "single-paper"
 }
-```
-
-**Response Format**:
-```json
-{
-  "answer": "The transformer paper uses a self-attention mechanism...",
-  "citations": [
-    {
-      "paper_title": "Attention is All You Need",
-      "section": "Methodology",
-      "page": 3,
-      "relevance_score": 0.89
-    }
-  ],
-  "sources_used": ["paper3_nlp_transformers.pdf"],
-  "confidence": 0.85
-}
-```
-
-#### 3. Paper Management
-```python
-GET    /api/papers              # List all papers
-GET    /api/papers/{id}         # Get paper details
-DELETE /api/papers/{id}         # Remove paper + vectors
-GET    /api/papers/{id}/stats   # View/download stats
-```
-
-#### 4. Query History & Analytics
-```python
-GET /api/queries/history         # Recent queries
-GET /api/analytics/popular       # Most queried topics
-```
-
-Store:
-- Query text
-- Papers referenced
-- Response time
-- User satisfaction (optional rating)
-
----
-
-## 🏗️ System Architecture
-
-```
-┌─────────────┐
-│   Client    │
-└──────┬──────┘
-       │
-       ▼
-┌─────────────────────────────────┐
-│      FastAPI Application        │
-│  ┌───────────────────────────┐  │
-│  │   Document Processor      │  │
-│  │  - PDF extraction         │  │
-│  │  - Chunking strategy      │  │
-│  │  - Embedding generation   │  │
-│  └───────────────────────────┘  │
-│                                  │
-│  ┌───────────────────────────┐  │
-│  │   RAG Pipeline            │  │
-│  │  - Query understanding    │  │
-│  │  - Vector retrieval       │  │
-│  │  - Context assembly       │  │
-│  │  - LLM generation         │  │
-│  └───────────────────────────┘  │
-└────┬──────────────────┬─────────┘
-     │                  │
-     ▼                  ▼
-┌─────────┐      ┌──────────────┐
-│ Qdrant  │      │ PostgreSQL/  │
-│ Vector  │      │ MySQL        │
-│ Store   │      │ (Metadata)   │
-└─────────┘      └──────────────┘
-     │
-     ▼
-┌─────────────┐
-│ Ollama/     │
-│ DeepSeek    │
-│ (LLM)       │
-└─────────────┘
-```
-
----
-
-## 📊 Test Dataset
-
-**5 Sample Papers Provided** (in `sample_papers/` directory):
-
-1. `paper1_machine_learning.pdf` - Classic ML algorithms
-2. `paper2_neural_networks.pdf` - Deep learning architectures
-3. `paper3_nlp_transformers.pdf` - Transformer models
-4. `paper4_computer_vision.pdf` - CNN and vision models
-5. `paper5_reinforcement_learning.pdf` - RL algorithms
-
-**20 Test Queries** provided in `test_queries.json` covering:
-- Single-paper queries (easy)
-- Multi-paper comparisons (medium)
-- Abstract concept queries (hard)
-
----
-
-## 🚀 Getting Started
-
-### Prerequisites
-```bash
-# Python 3.10+
-python --version
-
-# Docker (for Qdrant)
-docker --version
-
-# Ollama (if using local LLM)
-curl https://ollama.ai/install.sh | sh
-```
-
-### Quick Setup
-
-1. **Fork this repository**
-   ```bash
-   # Click "Fork" button on GitHub
-   ```
-
-2. **Clone your fork**
-   ```bash
-   git clone https://github.com/YOUR_USERNAME/research-paper-rag-assessment.git
-   cd research-paper-rag-assessment
-   ```
-
-3. **Create working branch**
-   ```bash
-   git checkout -b submission/YOUR_NAME
-   ```
-
-4. **Set up environment**
-   ```bash
-   # Start Qdrant
-   docker run -p 6333:6333 qdrant/qdrant
-   
-   # Install Ollama and pull model
-   ollama pull llama3
-   # OR set up DeepSeek API key
-   
-   # Create Python virtual environment
-   python -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
-   ```
-
-5. **Start building!** 🎉
-
----
-
-## 📦 Submission Requirements
-
-### Your Repo Structure Should Look Like:
-```
-your-fork/
-├── src/
-│   ├── main.py                 # FastAPI app
-│   ├── models/                 # Data models
-│   ├── services/
-│   │   ├── pdf_processor.py
-│   │   ├── embedding_service.py
-│   │   ├── qdrant_client.py
-│   │   └── rag_pipeline.py
-│   ├── api/
-│   │   └── routes.py
-│   └── config.py
-├── tests/                      # Unit tests (bonus)
-├── requirements.txt
-├── .env.example
-├── docker-compose.yml          # (optional)
-├── README.md                   # YOUR documentation
-├── APPROACH.md                 # Design decisions
-└── architecture.png            # System diagram
-```
-
-### Must Include:
-
-1. **README.md** with:
-   - Clear setup instructions (step-by-step)
-   - How to run the application
-   - API endpoint documentation
-   - Example curl commands or Postman collection
-   - Architecture explanation
-
-2. **APPROACH.md** explaining:
-   - Chunking strategy and why
-   - Embedding model choice
-   - Prompt engineering approach
-   - Database schema design
-   - Trade-offs and limitations
-
-3. **Working Code** that:
-   - Processes all 5 sample papers
-   - Answers test queries accurately
-   - Includes error handling
-   - Has proper logging
-
-4. **Configuration**:
-   - `.env.example` (no secrets!)
-   - `requirements.txt` (complete)
-
----
-
-## ✅ Self-Check Before Submission
-
-- [ ] Can upload and process PDFs
-- [ ] Query endpoint returns relevant answers
-- [ ] Citations include paper name + section/page
-- [ ] All 5 papers successfully indexed
-- [ ] Tested with queries from `test_queries.json`
-- [ ] API returns proper error messages
-- [ ] README has complete setup instructions
-- [ ] No hardcoded paths or credentials
-- [ ] Code is clean and commented
-- [ ] Logs to console/file
-
----
-
-## 🎯 Evaluation Criteria
-
-| Category | Weight | Key Points |
-|----------|--------|------------|
-| **Functionality** | 35% | Features work, edge cases handled |
-| **RAG Quality** | 25% | Relevant retrieval, accurate answers, citations |
-| **Code Quality** | 20% | Clean, modular, error handling |
-| **Documentation** | 10% | Clear setup, architecture explained |
-| **API Design** | 10% | RESTful, proper validation |
-| **Bonus** | +15% | Tests, Docker, UI, extras |
-
-**Total**: 100 points + 15 bonus = 115 possible
-
-### Scoring:
-- **90+**: Exceptional - Strong hire ⭐
-- **75-89**: Good - Hire with mentoring ✅
-- **60-74**: Borderline - Discussion needed ⚠️
-- **<60**: Does not meet requirements ❌
-
----
-
-## 🏆 Bonus Features (Optional)
-
-Impress us with:
-- ✨ **Docker Compose** - One command setup
-- 🧪 **Unit Tests** - >60% coverage
-- 🎨 **Simple Web UI** - Upload & query interface
-- 🔄 **Multi-paper Compare** - Side-by-side analysis
-- ⚡ **Caching** - Speed up repeat queries
-- 📊 **Analytics Dashboard** - Query insights
-- 🔒 **Authentication** - Basic API keys
-- 📝 **Export Results** - Save as PDF/Markdown
-
----
-
-## ⏱️ Timeline
-
-**Recommended**: 3 daus
-
-- **Day 1**: Setup + PDF processing + Qdrant integration
-- **Day 2**: Database schema + embeddings + basic API
-- **Day 3**: RAG pipeline + LLM integration
-- **Day 4**: Testing + documentation + refinement
-- **Day 5**: Bonus features + final polish
-
-**Submission Deadline**: [31st October 2025]
-
----
-
-## 📨 How to Submit
-
-1. **Push your code** to your fork
-2. **Create Pull Request** to this repo's `master` branch
-3. **Fill out PR template** completely
-4. **Wait for review** (we'll respond within 3 business days)
-
-Detailed submission guide: See [SUBMISSION_GUIDE.md](SUBMISSION_GUIDE.md)
-
-Detailed Pull request guide: See [PULL_REQUEST_TEMPLATE.md]()
-
----
-
-## ❓ Need Help?
-
-**Technical Questions**:
-- Open an issue with `question` label
-- We respond within 24 hours (weekdays)
-
-**Submission Issues**:
-- Check [SUBMISSION_GUIDE.md](SUBMISSION_GUIDE.md)
-- Check [PULL_REQUEST_TEMPLATE.md](PULL_REQUEST_TEMPLATE.md)
-- Email: [ishmam.abid5422@gmail.com]
-
-**Clarifications**:
-- Don't assume - ask!
-- We prefer over-communication
-
----
-
-## 🎓 What Happens After Submission?
-
-1. ✅ **Code Review** (2-3 days)
-   - Automated tests run
-   - Manual code review
-   - Documentation check
-
-2. 📞 **Technical Interview** (1 hour)
-   - Discuss your solution
-   - Architecture deep-dive
-   - Potential improvements
-   - Scaling scenarios
-
-3. 🎉 **Decision** (within 1 week)
-
----
-
-## 🌟 Tips for Success
-
-**DO**:
-- ✅ Start simple, then enhance
-- ✅ Test with provided papers/queries
-- ✅ Write clear documentation
-- ✅ Handle errors gracefully
-- ✅ Explain your decisions
-- ✅ Ask questions if unclear
-
-**DON'T**:
-- ❌ Hardcode credentials
-- ❌ Copy-paste without understanding
-- ❌ Skip error handling
-- ❌ Ignore the test dataset
-- ❌ Submit without testing
-- ❌ Overcomplicate unnecessarily
-
----
-
-## 📚 Helpful Resources
-
-- [Qdrant Documentation](https://qdrant.tech/documentation/)
-- [Ollama Documentation](https://ollama.ai/docs)
-- [LangChain RAG Guide](https://python.langchain.com/docs/use_cases/question_answering/)
-- [FastAPI Tutorial](https://fastapi.tiangolo.com/tutorial/)
-- [Sentence Transformers](https://www.sbert.net/)
-
----
-
-## 🤝 Good Luck!
-
-We're excited to see your solution! This assessment reflects real work you'd do as a Junior AI Engineer on our team. Show us your problem-solving skills, code quality, and passion for AI.
-
-Remember: We're not looking for perfection - we're looking for potential, clear thinking, and solid fundamentals.
-
-**Questions? Open an issue!**
-**Ready? Fork and start building!** 🚀
-
----
+
+The pipeline:
+
+Embeds the query via local embed endpoint.
+
+Searches Qdrant (collection: research-papers) — optional filter by expected_papers.
+
+Builds prompt using top-k chunks and calls local LLM (/api/generate).
+
+Returns the LLM raw reply and metadata (topChunks, sources_used), or structured JSON if you enable parsing.
+
+5 — Common troubleshooting & tips
+PowerShell curl error
+
+PowerShell aliases curl to Invoke-WebRequest. Use:
+
+Invoke-RestMethod -Uri "http://localhost:6333/collections" -Method GET
+
+# Or use Git Bash / WSL for regular curl
+
+Qdrant Not Found: Collection 'X' doesn't exist!
+
+Run:
+
+curl http://localhost:6333/collections
+
+Confirm the collection name returned (e.g. "research-papers") and use that exact name when calling delete/count/search. Hyphens and underscores are different.
+
+find() vs findById() gotcha
+
+Model.find({ \_id: id }) → returns an array.
+
+Model.findById(id) → returns a single document.
+
+If you expect a single document, use findById(id) and then paper.paperSegments will be accessible.
+
+Embedding/LLM APIs return format
+
+Embedding endpoint must return an embedding at response.data.embedding (or adjust getEmbedding util accordingly).
+
+Local LLM generation endpoint used in this repo expects response text in response.data.response. Adjust parsing if your LLM returns differently.
+
+Reset Qdrant (dev)
+
+Delete all collections (soft reset):
+
+curl -X DELETE "http://localhost:6333/collections"
+
+In PowerShell:
+
+Invoke-RestMethod -Uri "http://localhost:6333/collections" -Method DELETE
+
+Full reset (wipe persistent storage):
+
+docker stop qdrant
+docker rm qdrant
+rm -rf /path/to/qdrant_storage
+docker run -d --name qdrant -p 6333:6333 -v /path/to/qdrant_storage:/qdrant/storage qdrant/qdrant
+
+Qdrant client method differences
+
+Different versions of @qdrant/js-client-rest may have slightly different method signatures (e.g., search(collection, { vector, limit }), delete(collection, { filter }), count(collection, { filter })). If you see errors, check the package docs or use client.getCollections() to confirm connection.
+
+6 — Where to plug things in (code references)
+
+src/routes/papers.route.js — paper upload, get, delete, stats endpoints
+
+src/controllers/papers.controller.js — uploadAPaper, getAPaper, removeAPaper, viewAPaperStats
+
+src/services/papers.service.js — extractPdf, createOverlappingChunks, pushEmbeddingsToQdrant, extractTitle, extractMethodology
+
+src/utils/embed.js — getEmbedding() util (calls local /api/embeddings)
+
+src/services/query.service.js — runQueryPipeline() (embed query → search Qdrant → prompt LLM)
+
+src/services/cleanup.service.js — cleanSegmentsWithLLM() (rewrites merged segments via LLM)
+
+7 — Quick "smoke" tests
+
+Qdrant is up:
+
+curl http://localhost:6333/collections
+
+LLM is up:
+
+curl -X POST http://localhost:11434/api/generate -H "Content-Type: application/json" -d '{"model":"deepseek-r1:latest","prompt":"hello"}'
+
+Expect a JSON reply with response.
+
+Embedding endpoint:
+
+curl -X POST http://localhost:11434/api/embeddings -H "Content-Type: application/json" -d '{"model":"nomic-embed-text","prompt":"Test embedding"}'
+
+Expect JSON including an embedding array.
+
+Upload a PDF (ingest & index):
+
+curl -v -F "file=@./papers/sample.pdf" http://localhost:5000/api/papers/upload
+
+Query (quick):
+
+curl -X POST http://localhost:5000/api/query -H "Content-Type: application/json" -d '{"id":1,"question":"What is the methodology?","expected_papers":["paper_3.pdf"],"type":"single-paper"}'
+
+View stats:
+
+curl http://localhost:5000/api/papers/<paperId>/stats
+
+8 — Minimal troubleshooting checklist
+
+MongoDB connection string correct → check logs on startup.
+
+Qdrant listening on port 6333 and collection name matches controller.
+
+Local LLM endpoints respond with the fields expected by the code (response / embedding).
+
+Use findById(id) to access paper.paperSegments.
+
+If a route isn't hit, confirm that route file is mounted in app.js and you're using the correct method & URL (path param vs query param).
+
+9 — Useful commands recap
+
+# Install
+
+npm install
+
+# Start server (dev)
+
+npm run dev
+
+# Check qdrant collections
+
+curl http://localhost:6333/collections
+
+# Delete all qdrant collections (dev)
+
+curl -X DELETE "http://localhost:6333/collections"
+
+# Inspect one paper
+
+curl http://localhost:5000/api/papers/<paperId>
+
+# Run query
+
+curl -X POST http://localhost:5000/api/query -H
